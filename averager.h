@@ -102,6 +102,7 @@ public:
             src_sum.start_s = large.front().start_s;
             src_sum.dur_s = full_duration;
 
+            // TODO need overflow protect
             ultimate.avg = ((src_sum.dur_s * src_sum.avg)
                             + (ultimate.dur_s * ultimate.avg))
                            / (src_sum.dur_s + ultimate.dur_s);
@@ -114,7 +115,7 @@ public:
 private:
     // изначально получаемые данные хранятся в векторе 'small' с 1-секундным усреднением
     // когда он наполняется, находится средняя скорость и перекладывается в одну ячейку 'mid' вектора
-    // в конечном итоге, при продолжительном измерение, максимально усредненные данные попадут в 'ultimate' переменную
+    // в конечном итоге, при продолжительном измерении, максимально усредненные данные попадут в 'ultimate' переменную
     std::vector<avg_chunk_t> small;
     std::vector<avg_chunk_t> mid;
     std::vector<avg_chunk_t> large;
