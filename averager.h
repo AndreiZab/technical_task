@@ -1,34 +1,27 @@
 #include <vector>
 
 
-#define ERROR_TOO_LARGE_WINDOW -1
-#define ERROR_ZERO_WINDOW      -2
-#define ERROR_NO_DATA          -3
+#define ERROR_TOO_LONG_WINDOW -1
+#define ERROR_ZERO_WINDOW     -2
+#define NO_DATA                0
 
-#define PERCENT_DIVIATION 10.0f
+#define PERCENT_DEVIATION 10.0f
 
-#define VEC_TARGET_SIZE 5
-
-#include <stdio.h>
+#define VEC_TARGET_SIZE 100
 
 typedef struct {
-    uint32_t value;
-    time_t time_stamp; // 32-bit system 'Year 2038 problem'
+    uint32_t avg; // средняя скорость
+    time_t dur_s; // продолжительность временного отрезка
+    time_t start_s; // время начало отрезка (Unix time)
+    // TODO 32-bit architecture: 'Year 2038 problem'
 }
-rx_value_t;
-
-typedef struct {
-    uint32_t avg;
-    time_t duration_s;
-    time_t start_time_s; // 32-bit architecture:  'Year 2038 problem'
-}
-avg_speed_t;
+avg_chunk_t;
 
 class Averager {
 public:
     Averager(uint32_t avg_time_s) {
         p_avg_time_s = avg_time_s;
-        memset(&ultimate_avg, 0, sizeof(ultimate_avg));
+        memset(&ultimate, 0, sizeof(ultimate));
     };
 
     /* Меняем время усреднения в процессе работы */
@@ -40,99 +33,98 @@ public:
     float GetAverageSpeed() {
 
         uint32_t avg_time_s = p_avg_time_s;
-        time_t curr_time = time(nullptr);
-
-        printf("s:%lu, a:%d\n", small_avg.size(), avg_time_s);
+        time_t cur_time = time(nullptr);
 
         if (avg_time_s == 0) {
             return ERROR_ZERO_WINDOW;
         }
-        if (small_avg.empty() && mid_avg.empty() && large_avg.empty() && ultimate_avg.duration_s == 0) {
-            return ERROR_NO_DATA;
+        if (window_too_long(cur_time, avg_time_s)) {
+            return ERROR_TOO_LONG_WINDOW;
         }
-        if (window_too_long(curr_time, avg_time_s)) {
-            return ERROR_TOO_LARGE_WINDOW;
+        if (small.empty() && mid.empty() && large.empty() && ultimate.dur_s == 0) {
+            return NO_DATA;
         }
 
         // обход всех векторов с сохраненными данными
-        return calc_avg_spd(curr_time, avg_time_s);
+        return calc_avg_spd(cur_time, avg_time_s);
     };
 
 
     /* Добавлем информацию о получении value байтов */
     void AddValue(uint32_t value) {
-        avg_speed_t new_elem;
-        avg_speed_t *last_elem = &small_avg.back(); // TODO can i do like this?
-
-        // TODO syscall all time - bad solution
+        avg_chunk_t new_elem;
+        avg_chunk_t *last = nullptr;
+        if (!small.empty()) {
+            last = &small.back();
+        }
+        // TODO постоянный syscall - плохое решение
         time_t curr_time = time(nullptr);
 
         // если в эту секунду уже принимали данные, добавляем их к имеющимся
-        if (!small_avg.empty() && (curr_time <= last_elem->duration_s + last_elem->start_time_s - 1)) {
-//            printf("ADD: %ld(%d)\n", curr_time, value);
-            last_elem->avg = (last_elem->avg * last_elem->duration_s + value) / last_elem->duration_s;
+        if (!small.empty() && (curr_time <= last->dur_s + last->start_s - 1)) {
+            last->avg = (last->avg * last->dur_s + value) / last->dur_s;
         }
         // проверка на то, можно ли добавить элемент в уже созданную ячейку
-        // можно если он не сильно отклоняет avg и прошло немного времени
-        else if ((!small_avg.empty()) &&
-            (num_div_percent((float)last_elem->avg, (float)value, PERCENT_DIVIATION)) &&
-            (curr_time <= (last_elem->start_time_s + last_elem->duration_s + 1))) {
+        // можно если он не сильно отклоняет avg и присутствие последовательность во времени приема
+        else if ((!small.empty()) &&
+                 (num_div_percent((float)last->avg, (float)value, PERCENT_DEVIATION)) &&
+                 (curr_time <= (last->start_s + last->dur_s + 1))) {
             // TODO need overflow protect
-//            printf("D++: %ld(%d)\n", curr_time, value);
-
-            last_elem->avg = (last_elem->avg * last_elem->duration_s + value) / (last_elem->duration_s + 1);
-            last_elem->duration_s++;
+            last->avg = (last->avg * last->dur_s + value) / (last->dur_s + 1);
+            last->dur_s++;
         }
         // создаем новый элемент
         else {
-//            printf("NEW: %ld(%d)\n", curr_time, value);
-
             new_elem.avg = value;
-            new_elem.duration_s = 1;
-            new_elem.start_time_s = curr_time;
-            small_avg.push_back(new_elem);
+            new_elem.dur_s = 1;
+            new_elem.start_s = curr_time;
+            small.push_back(new_elem);
         }
 
-        if (small_avg.size() > VEC_TARGET_SIZE) {
-            average_and_transfer_data(small_avg, mid_avg);
-            printf("go!%d\n",mid_avg[0].avg);
+        // когда накопили много данных, аппроксимируем их и добавляем в вектор с большим усреднением
+        // (очищая начальный вектор)
+        if (small.size() > VEC_TARGET_SIZE) {
+            average_and_transfer_data(small, mid);
         }
-        if (mid_avg.size() > VEC_TARGET_SIZE) {
-            average_and_transfer_data(mid_avg, large_avg);
+        if (mid.size() > VEC_TARGET_SIZE) {
+            average_and_transfer_data(mid, large);
         }
-        if (large_avg.size() > VEC_TARGET_SIZE) {
-            avg_speed_t src_sum;
-            uint32_t full_src_duration =
-                    large_avg.back().duration_s + large_avg.back().start_time_s - large_avg.front().start_time_s;
+        // если данных накопилось предельного много, сохраняем их в переменную с максимальным усреднением
+        if (large.size() > VEC_TARGET_SIZE) {
+            avg_chunk_t src_sum;
+            uint32_t full_duration =
+                    large.back().dur_s + large.back().start_s - large.front().start_s;
             memset(&src_sum, 0, sizeof(src_sum));
 
-            for (auto it = begin (large_avg); it != end (large_avg); it++) {
-                src_sum.avg += it->avg * it->duration_s / full_src_duration;
+            for (auto it = begin (large); it != end (large); it++) {
+                src_sum.avg += it->avg * it->dur_s / full_duration;
             }
-            src_sum.start_time_s = large_avg.front().start_time_s;
-            src_sum.duration_s = full_src_duration;
+            src_sum.start_s = large.front().start_s;
+            src_sum.dur_s = full_duration;
 
-            ultimate_avg.avg = ((src_sum.duration_s * src_sum.avg)
-                              + (ultimate_avg.duration_s * ultimate_avg.avg))
-                             / (src_sum.duration_s + ultimate_avg.duration_s);
-            ultimate_avg.duration_s += src_sum.duration_s;
+            ultimate.avg = ((src_sum.dur_s * src_sum.avg)
+                            + (ultimate.dur_s * ultimate.avg))
+                           / (src_sum.dur_s + ultimate.dur_s);
+            ultimate.dur_s += src_sum.dur_s;
 
-            large_avg.clear();
+            large.clear();
         }
     };
 
 private:
-    std::vector<avg_speed_t> small_avg;
-    std::vector<avg_speed_t> mid_avg;
-    std::vector<avg_speed_t> large_avg;
-    avg_speed_t ultimate_avg;
+    // изначально получаемые данные хранятся в векторе 'small' с 1-секундным усреднением
+    // когда он наполняется, находится средняя скорость и перекладывается в одну ячейку 'mid' вектора
+    // в конечном итоге, при продолжительном измерение, максимально усредненные данные попадут в 'ultimate' переменную
+    std::vector<avg_chunk_t> small;
+    std::vector<avg_chunk_t> mid;
+    std::vector<avg_chunk_t> large;
+    avg_chunk_t ultimate;
 
-    uint32_t p_avg_time_s;
+    uint32_t p_avg_time_s; // окно по которому будет происходить усреднение
 
-    // Если отклонение dst от src превышает div% то возвращает false
+    // если отклонение dst от src превышает div% то возвращает false
     bool num_div_percent(const float src, const float dst, const float div) {
         bool ret;
-        // TODO may be need float
         if (((src > dst) && ((src * (1.0f - div / 100)) < dst)) ||
             ((src < dst) && ((src * (1.0f + div / 100)) > dst)) ||
             (src == dst)) {
@@ -142,91 +134,99 @@ private:
         }
         return ret;
     };
-    //  Проверяем не выходит ли запрашиваемое пользователем окно за рамки измеренного нами
+
+    // проверяем не выходит ли запрашиваемое пользователем окно за рамки измеренного программой
     bool window_too_long(const time_t curr_time, const uint32_t avg_time_s) {
         bool ret;
-        if ((ultimate_avg.avg != 0 && ultimate_avg.start_time_s < (curr_time - avg_time_s)) ||
-            (!large_avg.empty() && large_avg.front().start_time_s < (curr_time - avg_time_s)) ||
-            (!mid_avg.empty()   && mid_avg.front().start_time_s   < (curr_time - avg_time_s)) ||
-            (!small_avg.empty() && small_avg.front().start_time_s < (curr_time - avg_time_s))) {
+        if ((ultimate.avg != 0 && ultimate.start_s <= (curr_time - avg_time_s)) ||
+            (!large.empty() && large.front().start_s <= (curr_time - avg_time_s)) ||
+            (!mid.empty() && mid.front().start_s <= (curr_time - avg_time_s)) ||
+            (!small.empty() && small.front().start_s <= (curr_time - avg_time_s))) {
             ret = false;
         } else {
-
            ret = true;
          }
         return ret;
     };
 
-    void sum_elem(const std::vector<avg_speed_t>& vec,
-                  const time_t curr_time, const uint32_t avg_time_s,
-                  float* avg_spd, time_t* sum_duration) {
-        time_t duration = 0;
+    // обход полученного вектора vec с сохранением суммы в avg_spd и продолжительности в sum_dur
+    void sum_elem(const std::vector<avg_chunk_t>& vec,
+                  const time_t cur_time, const uint32_t avg_time_s,
+                  float* avg_spd, time_t* sum_dur) {
+        time_t dur = 0;
 
         if (!vec.empty()) {
             auto i = vec.size() - 1;
-            while ((i <= vec.size()) &&
-                   ((vec[i].start_time_s + vec[i].duration_s) > (curr_time - avg_time_s))) {
+            // обходим вектор с конца пока время в ячейках соответствует запрашиваемому окну
+            while ((i < vec.size()) &&
+                   ((vec[i].start_s + vec[i].dur_s) > (cur_time - avg_time_s))) {
 
-                duration = vec[i].duration_s;
-                if ((duration + (*sum_duration)) > avg_time_s) {
-                    duration = avg_time_s - (*sum_duration);
+                dur = vec[i].dur_s;
+                // если необходима только часть данных их ячейки
+                if ((dur + (*sum_dur)) > avg_time_s) {
+                    dur = avg_time_s - (*sum_dur);
                 }
-                printf("(%ld)", duration);
 
-                (*avg_spd) += ((float) vec[i].avg / (float) avg_time_s * (float) duration);
-                (*sum_duration) += duration;
+                (*avg_spd) += ((float) vec[i].avg / (float) avg_time_s * (float) dur);
+                (*sum_dur) += dur;
                 i--;
             }
         }
-
     };
 
-    float calc_avg_spd(const time_t curr_time, const uint32_t avg_time_s) {
+    // расчет средней скорости приема данных
+    float calc_avg_spd(const time_t cur_time, const uint32_t avg_time_s) {
         float avg_spd = 0;
-        time_t sum_duration = 0;
+        time_t sum_dur = 0;
 
-        sum_elem(small_avg, curr_time, avg_time_s, &avg_spd, &sum_duration);
-        sum_elem(mid_avg,   curr_time, avg_time_s, &avg_spd, &sum_duration);
-        sum_elem(large_avg, curr_time, avg_time_s, &avg_spd, &sum_duration);
-
-        if ((ultimate_avg.start_time_s + ultimate_avg.duration_s) > (curr_time - avg_time_s)) {
-            avg_spd += ((float) ultimate_avg.avg / (float) avg_time_s * (float) (avg_time_s - sum_duration));
+        // обходим каждый вектор и суммируем скорость в них (с учетом веса каждого временного отрезка)
+        sum_elem(small, cur_time, avg_time_s, &avg_spd, &sum_dur);
+        sum_elem(mid, cur_time, avg_time_s, &avg_spd, &sum_dur);
+        sum_elem(large, cur_time, avg_time_s, &avg_spd, &sum_dur);
+        if ((ultimate.start_s + ultimate.dur_s) > (cur_time - avg_time_s)) {
+            avg_spd += ((float) ultimate.avg / (float) avg_time_s * (float) (avg_time_s - sum_dur));
         }
+
         return avg_spd;
     };
 
     // найти среднее значение элементов src и переложить его в одну ячейку dst
-    void average_and_transfer_data(std::vector<avg_speed_t>& src, std::vector<avg_speed_t>& dst) {
+    void average_and_transfer_data(std::vector<avg_chunk_t>& src, std::vector<avg_chunk_t>& dst) {
 
-        avg_speed_t src_sum;
+        avg_chunk_t src_sum;
         uint32_t full_src_duration = 0;
 
         if (src.empty()) {
             return ;
         }
         memset(&src_sum, 0, sizeof(src_sum));
-        full_src_duration = src.back().duration_s + src.back().start_time_s - src.front().start_time_s ;
+
+        // находим продолжительность приема данных в усредняемом векторе (включая промежутки без входящих данных)
+        full_src_duration = src.back().dur_s + src.back().start_s - src.front().start_s ;
 
         for (auto it = begin (src); it != end (src); it++) {
-            src_sum.avg += it->avg * it->duration_s / full_src_duration;
+            src_sum.avg += it->avg * it->dur_s / full_src_duration;
         }
-        src_sum.start_time_s = src.front().start_time_s;
-        src_sum.duration_s = full_src_duration;
+        src_sum.start_s = src.front().start_s;
+        src_sum.dur_s = full_src_duration;
 
-
+        // при возможности добавляем данные в уже существующую ячейку
+        // (если нет большого отклонение в avg и присутствие последовательность во времени приема)
         if ((!dst.empty()) &&
-            (num_div_percent((float)dst.back().avg, (float)src_sum.avg, PERCENT_DIVIATION)) &&
-            (src_sum.start_time_s <= (dst.back().start_time_s + dst.back().duration_s + 1))) {
+            (num_div_percent((float)dst.back().avg, (float)src_sum.avg, PERCENT_DEVIATION)) &&
+            (src_sum.start_s <= (dst.back().start_s + dst.back().dur_s + 1))) {
             // TODO need overflow protect
-            dst.back().avg = ((src_sum.duration_s * src_sum.avg)
-                            + (dst.back().duration_s * dst.back().avg))
-                            / (src_sum.duration_s + dst.back().duration_s);
-            dst.back().duration_s += src_sum.duration_s;
+            dst.back().avg = ((src_sum.dur_s * src_sum.avg)
+                            + (dst.back().dur_s * dst.back().avg))
+                            / (src_sum.dur_s + dst.back().dur_s);
+            dst.back().dur_s += src_sum.dur_s;
         }
+        // добавляем новый элемент в вектор с большим усреднением
         else {
             dst.push_back(src_sum);
         }
 
+        // очищаем усредняемый вектор
         src.clear();
     };
 };
