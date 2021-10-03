@@ -57,7 +57,7 @@ public:
         if (!small.empty()) {
             last = &small.back();
         }
-        // TODO постоянный syscall - плохое решение
+        // TODO syscall all time - bad solution ( and need rework with ms instead s )
         time_t curr_time = time(nullptr);
 
         // если в эту секунду уже принимали данные, добавляем их к имеющимся
