@@ -139,7 +139,7 @@ private:
     // проверяем, не выходит ли запрашиваемое пользователем окно за рамки измеренного программой
     bool window_too_long(const time_t curr_time, const uint32_t avg_time_s) {
         bool ret;
-        if ((ultimate.avg >= 0 && ultimate.start_s      <= (curr_time - avg_time_s)) ||
+        if ((ultimate.avg > 0 && ultimate.start_s      <= (curr_time - avg_time_s)) ||
             (!large.empty()    && large.front().start_s <= (curr_time - avg_time_s)) ||
             (!mid.empty()      && mid.front().start_s   <= (curr_time - avg_time_s)) ||
             (!small.empty()    && small.front().start_s <= (curr_time - avg_time_s))) {
