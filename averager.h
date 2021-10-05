@@ -65,7 +65,7 @@ public:
             last->avg = (last->avg * (float)last->dur_s + rx_val) / (float)last->dur_s;
         }
         // проверка на то, можно ли добавить элемент в уже созданную ячейку
-        // можно если он не сильно отклоняет avg и присутствие последовательность во времени приема
+        // можно, если он не сильно отклоняет avg и присутствие последовательность во времени приема
         else if ((!small.empty()) &&
                  (num_div_percent(last->avg, rx_val, PERCENT_DEVIATION)) &&
                  (curr_time <= (last->start_s + last->dur_s + 1))) {
@@ -89,7 +89,7 @@ public:
         if (mid.size() > VEC_TARGET_SIZE) {
             average_and_transfer_data(mid, large);
         }
-        // если данных накопилось предельного много, сохраняем их в переменную с максимальным усреднением
+        // если данных накопилось предельно много, сохраняем их в переменную с максимальным усреднением
         if (large.size() > VEC_TARGET_SIZE) {
             avg_chunk_t src_sum;
             uint32_t full_duration =
@@ -113,17 +113,17 @@ public:
     };
 
 private:
-    // изначально получаемые данные хранятся в векторе 'small' с 1-секундным усреднением
+    // изначально получаемые данные хранятся в векторе 'small' с посекундным усреднением
     // когда он наполняется, находится средняя скорость и перекладывается в одну ячейку 'mid' вектора
-    // в конечном итоге, при продолжительном измерении, максимально усредненные данные попадут в 'ultimate' переменную
+    // в конечном итоге при продолжительном измерении максимально усредненные данные попадут в 'ultimate' переменную
     std::vector<avg_chunk_t> small;
     std::vector<avg_chunk_t> mid;
     std::vector<avg_chunk_t> large;
     avg_chunk_t ultimate;
 
-    uint32_t p_avg_time_s; // окно по которому будет происходить усреднение
+    uint32_t p_avg_time_s; // окно, по которому будет происходить усреднение
 
-    // если отклонение dst от src превышает div% то возвращает false
+    // если отклонение dst от src превышает div%, то возвращает false
     bool num_div_percent(const float src, const float dst, const float div) {
         bool ret;
         if (((src > dst) && ((src * (1.0f - div / 100)) < dst)) ||
@@ -136,7 +136,7 @@ private:
         return ret;
     };
 
-    // проверяем не выходит ли запрашиваемое пользователем окно за рамки измеренного программой
+    // проверяем, не выходит ли запрашиваемое пользователем окно за рамки измеренного программой
     bool window_too_long(const time_t curr_time, const uint32_t avg_time_s) {
         bool ret;
         if ((ultimate.avg >= 0 && ultimate.start_s      <= (curr_time - avg_time_s)) ||
@@ -158,12 +158,12 @@ private:
 
         if (!vec.empty()) {
             auto i = vec.size() - 1;
-            // обходим вектор с конца пока время в ячейках соответствует запрашиваемому окну
+            // обходим вектор с конца, пока время в ячейках соответствует запрашиваемому окну
             while ((i < vec.size()) &&
                    ((vec[i].start_s + vec[i].dur_s) > (cur_time - avg_time_s))) {
 
                 dur = vec[i].dur_s;
-                // если необходима только часть данных их ячейки
+                // если необходима только часть данных из ячейки
                 if ((dur + (*sum_dur)) > avg_time_s) {
                     dur = avg_time_s - (*sum_dur);
                 }
@@ -212,7 +212,7 @@ private:
         src_sum.dur_s = full_src_duration;
 
         // при возможности добавляем данные в уже существующую ячейку
-        // (если нет большого отклонение в avg и присутствие последовательность во времени приема)
+        // (если нет большого отклонение в avg и присутствует последовательность во времени приема)
         if ((!dst.empty()) &&
             (num_div_percent(dst.back().avg, src_sum.avg, PERCENT_DEVIATION)) &&
             (src_sum.start_s <= (dst.back().start_s + dst.back().dur_s + 1))) {
